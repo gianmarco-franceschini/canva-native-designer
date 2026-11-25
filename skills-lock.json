@@ -1,0 +1,180 @@
+{
+  "version": 2,
+  "skills": {
+    "breakdown": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/breakdown/SKILL.md",
+      "computedHash": "1e36924ab982f0112fd7a661d0d92b6fad3d9585012b1181f7bd63a61b88d47a"
+    },
+    "dan-koe": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/dan-koe/SKILL.md",
+      "computedHash": "524cb4933923159ae7515aec7dead485f5e9ff192fad01620ec0bf5400dc2c5b"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "commit": "57217cf86ba38148a57af9e90d14a4c049558330",
+      "sourceType": "github",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "computedHash": "7bc223e2aafbdbf6e50ea243ba6ef67fe432bb069ab439fea0390795dac0bf7f"
+    },
+    "graph": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/graph/SKILL.md",
+      "computedHash": "92926d98e6cdd13dbe2094333aac9ac24ccf4623284af98aaa27dd55e0dfdeda"
+    },
+    "ig-audit": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-audit/SKILL.md",
+      "computedHash": "73a2ed8c0a6563bf98995c19f179669580813189f8fc44c51b964cf86bf8f9fb"
+    },
+    "ig-caption": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-caption/SKILL.md",
+      "computedHash": "d1b6eb532690657cfb7a47228d486b6e8deda047ae03c017278860eeffc9fbbd"
+    },
+    "ig-carousel": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-carousel/SKILL.md",
+      "computedHash": "38cb1a4a9a92b649c8c031217c0a82cc766aa888ae7e84e6b42fb651cd54d382"
+    },
+    "ig-comment": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-comment/SKILL.md",
+      "computedHash": "8fa4c7dbea13fb86a41134b419b90c979247760039cab4148c4e8713f04bfc9b"
+    },
+    "ig-dm": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-dm/SKILL.md",
+      "computedHash": "5eb376096bee31e1fb94eee39cc80558e47a00b826b5c0fbf377f80f393056fc"
+    },
+    "ig-human": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-human/SKILL.md",
+      "computedHash": "c3970397e0a189ac1726cd4cd29163802b40dc99d304c438a945fd5a0d5f6ec8"
+    },
+    "ig-plan": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-plan/SKILL.md",
+      "computedHash": "7f3d0472480e553a908c4d624d899c66bb4188852c6f793f3e9fbb1a7743e76d"
+    },
+    "ig-profile": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-profile/SKILL.md",
+      "computedHash": "6182f07343269b3d81c9b5fc2ee86341af6f86abc954ffd29668e47954886c0b"
+    },
+    "ig-reel": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-reel/SKILL.md",
+      "computedHash": "9e32045b0e8bf6c4d663aec6c12116639c746de3b7951bb94ebc5dd4318c3b10"
+    },
+    "ig-reply": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-reply/SKILL.md",
+      "computedHash": "1dfff3c0a0a2a4e1054cf65335cb00ee9d7db29a834d3be83829c1650c8d8590"
+    },
+    "ig-repurpose": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-repurpose/SKILL.md",
+      "computedHash": "ab22298daecc842de07ce9334fd98ed11ced41692e0923f18b70b9c168d55ec8"
+    },
+    "ig-story": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-story/SKILL.md",
+      "computedHash": "c3fce47b3bb585a896275ef9db096bf44658e1c7b93041823d313f5bd9d32524"
+    },
+    "ig-viral": {
+      "source": "Jakeschincariol/instagram-agent-skill",
+      "commit": "d03c56bb598be770c60b201f94237e5d1a4268a6",
+      "sourceType": "github",
+      "skillPath": "skills/ig-viral/SKILL.md",
+      "computedHash": "7ba57f5ddaaff8d8d58008e233f2f0d354eea848bb68d6d2fbe2ee0bf1f2f332"
+    },
+    "kurzgesagt": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/kurzgesagt/SKILL.md",
+      "computedHash": "0b1f5c9ba85120778aba5cd3c2b5007d73b595e82b3ef1add9b2098ad1e7a8f8"
+    },
+    "map-route": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/map-route/SKILL.md",
+      "computedHash": "ecd929932a8b3377d431809d798479924f38086078fdf3e26f0f9549014fbaf6"
+    },
+    "minecraft": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/minecraft/SKILL.md",
+      "computedHash": "f9f0677a6d8466b4296ffba0db7f445a0ebf7295ae197a4cf4ea38d31361afd5"
+    },
+    "minimalistic-graphics": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/minimalistic-graphics/SKILL.md",
+      "computedHash": "1e6490a7d51fc0274466f4b4e2469985a2a82732625f8228dee4d2f6e0e3e3f4"
+    },
+    "reanimate": {
+      "source": "NiazMorshed2007/reanimate",
+      "commit": "3f7a55a2986a84ca2173e86ee9127eefe31d046d",
+      "sourceType": "github",
+      "skillPath": "skills/reanimate/SKILL.md",
+      "computedHash": "5c7f0f2362037d5a45ae799c54ae427631d797c2b8ce0c32cdfde111883b3e1c"
+    },
+    "stick-figure": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/stick-figure/SKILL.md",
+      "computedHash": "f171689399948f42119fa6ab41af301896af1c2ad317ba8ffbf592a61c645fb6"
+    },
+    "zach-3d-films": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/zach-3d-films/SKILL.md",
+      "computedHash": "3463dc049c4fa1b69678bbbd3f0e31854c7d02ebb6aadd9dcb82c7c7c2a9c35b"
+    },
+    "zach-d-films": {
+      "source": "artemnovitckii/claude-animation-skills",
+      "commit": "86f70106c9aeae1334184467da5776c533ada3bc",
+      "sourceType": "github",
+      "skillPath": "skills/zach-d-films/SKILL.md",
+      "computedHash": "182a7d7477320972fb7fe779e57ab3493a336adbc9be632201f0fe56d91394a0"
+    }
+  }
+}
