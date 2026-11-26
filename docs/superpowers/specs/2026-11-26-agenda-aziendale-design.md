@@ -7,8 +7,7 @@ Stato: bozza da approvare
 
 In azienda (circa 10 persone, Google Workspace) vengono fissate **riunioni che si sovrappongono**.
 Serve una web app interna dove ognuno organizza le proprie riunioni con l'aiuto di un assistente AI
-che, **prima** di creare un impegno, controlla il calendario aziendale condiviso e i calendari di
-tutti i partecipanti, segnala i conflitti e propone orari liberi. L'evento viene creato solo dopo
+che, **prima** di creare un impegno, controlla i calendari di tutti i partecipanti, segnala i conflitti e propone orari liberi. L'evento viene creato solo dopo
 conferma esplicita della persona.
 
 La sicurezza è il requisito principale indicato dall'utente.
@@ -32,7 +31,7 @@ La sicurezza è il requisito principale indicato dall'utente.
   L'architettura deve permettere di aggiungerla senza rifare nulla, ma non si costruisce ora.
 - Prenotazione sale/risorse.
 - Invitati esterni al dominio.
-- Modifica o cancellazione di eventi esistenti creati fuori dall'app.
+- Modifica o cancellazione di eventi creati fuori dall'app; modifica (spostamento) di eventi creati dall'app — si annulla e se ne crea uno nuovo.
 - App mobile nativa (la web app deve però essere usabile da telefono).
 
 **Anti-obiettivi (sarebbe un fallimento anche se "funziona")**
@@ -50,7 +49,11 @@ La sicurezza è il requisito principale indicato dall'utente.
 - Hosting: **Vercel**.
 - Privacy: dei colleghi si vede **solo libero/occupato**.
 - Utenti: ~10, tutti organizzano le proprie riunioni; un ruolo **amministratore**.
-- Controllo conflitti su: **calendario aziendale condiviso + calendario di ogni partecipante**.
+- Il **calendario aziendale condiviso** è il posto dove si raccolgono tutte le riunioni create dall'app, per averle sott'occhio.
+  **Non** blocca nessuno: i conflitti si cercano **solo sui calendari dei partecipanti** (incluso il richiedente).
+- Riunione con conflitto: si può confermare solo con un'azione esplicita "Conferma comunque" e avviso ben visibile *(proposta, da confermare)*.
+- Chi ha creato una riunione può annullarla dall'app *(proposta, da confermare)*.
+- Orario lavorativo predefinito: lun–ven 9:00–13:00 e 14:00–18:00, festività italiane escluse, modificabile dall'admin *(proposta, da confermare)*.
 
 ## 4. Approcci considerati
 
@@ -120,17 +123,24 @@ n8n rifiuta se la firma non corrisponde o se il timestamp è più vecchio di 5 m
 condiviso solo tra variabili d'ambiente Vercel e credenziali n8n. Gli URL dei webhook non sono mai esposti al browser.
 
 **WF1 — freebusy**
-- Input: `{ emails: string[], timeMin: ISO, timeMax: ISO }` (+ id del calendario condiviso configurato in n8n, non passato dal client).
-- Azione: Google Calendar FreeBusy query su calendario condiviso + calendari dei partecipanti.
+- Input: `{ emails: string[], timeMin: ISO, timeMax: ISO }`.
+- Azione: Google Calendar FreeBusy query **solo sui calendari dei partecipanti** (il calendario condiviso non è incluso).
+- Gli eventi creati dall'app arrivano ai partecipanti come inviti, quindi compaiono nel loro libero/occupato: il costruttore deve verificare con un test reale che gli inviti non ancora accettati risultino occupati.
 - Output: `{ calendars: { [email]: { busy: [{start,end}], error?: string } } }` — **solo intervalli occupati**, nessun titolo/dettaglio.
 - Limite: massimo 14 giorni di intervallo, massimo 15 email.
 - **Errori per singolo calendario** (calendario non visibile, account inesistente): l'app li tratta **come occupato**, mai come libero, e lo segnala all'utente ("non riesco a vedere il calendario di X") *(scelta del progettista)*.
 
 **WF2 — create-event**
 - Input: `{ requestId, title, description, start, end, organizerEmail, attendeeEmails[] }`.
-- Azione: ricontrolla freebusy sugli stessi calendari; se c'è un conflitto nuovo risponde `{ status: "conflict", busy }` senza creare nulla; altrimenti crea l'evento sul **calendario aziendale condiviso** con richiedente e partecipanti come invitati, inviando gli inviti.
+- Input aggiuntivo: `allowConflict: boolean` (true solo se l'utente ha premuto "Conferma comunque").
+- Azione: ricontrolla freebusy sui calendari dei partecipanti; se c'è un conflitto e `allowConflict` è false risponde `{ status: "conflict", busy }` senza creare nulla; altrimenti crea l'evento sul **calendario aziendale condiviso** con richiedente e partecipanti come invitati, inviando gli inviti.
 - Output: `{ status: "created", eventId, htmlLink }`.
 - Idempotenza: `requestId` salvato nelle proprietà private dell'evento; se già esiste un evento con quel `requestId`, restituisce quello invece di crearne un altro.
+
+**WF3 — cancel-event**
+- Input: `{ requestId, googleEventId }`. Il server Next.js verifica prima che la richiesta appartenga all'utente e sia `confirmed`.
+- Azione: elimina l'evento dal calendario condiviso e invia la notifica di annullamento ai partecipanti.
+- Output: `{ status: "cancelled" }`. Stessa firma HMAC degli altri workflow.
 
 **Credenziale Google in n8n** (scelta del progettista): un account dedicato del dominio (es. `agenda@<dominio>`)
 con permesso di scrittura sul calendario condiviso. La visibilità libero/occupato dei colleghi è quella standard
@@ -149,7 +159,8 @@ viene indicato "Creato da <nome> tramite Agenda aziendale".
 
 **Regole**
 - La creazione reale avviene solo tramite `POST /api/requests/:id/confirm`, chiamato dal pulsante "Conferma"
-  della scheda. Il server verifica che la richiesta appartenga all'utente, sia `pending`, e la passa a WF2.
+  della scheda (o "Conferma comunque" se la scheda mostra un conflitto, che invia `allowConflict: true`).
+- `POST /api/requests/:id/cancel`: su `pending` cambia solo lo stato; su `confirmed` chiama WF3. Il server verifica che la richiesta appartenga all'utente, sia `pending`, e la passa a WF2.
 - Il richiedente è sempre l'utente autenticato: il modello non può scegliere l'organizzatore.
 - I partecipanti devono essere colleghi attivi in `allowed_users` (no indirizzi esterni in Fase 1).
 - Il system prompt: italiano, data/ora corrente e fuso, orario lavorativo, divieto di inventare disponibilità,
@@ -160,10 +171,10 @@ viene indicato "Creato da <nome> tramite Agenda aziendale".
 ### 5.6 Interfaccia (scelte del progettista)
 - `/login` — pulsante "Accedi con Google".
 - `/` — chat con l'assistente; le proposte compaiono come scheda con: titolo, data/ora, partecipanti, esito controllo
-  conflitti, pulsanti **Conferma** / **Annulla**.
+  conflitti, pulsanti **Conferma** / **Annulla**; se c'è un conflitto, avviso rosso e **Conferma comunque** al posto di Conferma.
 - `/nuova` — modulo: titolo, partecipanti (selezione dalla rubrica), durata, giorno → mostra slot liberi → conferma.
-- `/richieste` — elenco richieste dell'utente con stato e link all'evento Google.
-- `/admin` (solo admin) — utenti ammessi (aggiungi/disattiva, ruolo), registro attività filtrabile.
+- `/richieste` — elenco richieste dell'utente con stato, link all'evento Google e pulsante **Annulla riunione**.
+- `/admin` (solo admin) — utenti ammessi (aggiungi/disattiva, ruolo), orario lavorativo e chiusure, registro attività filtrabile.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -198,13 +209,13 @@ Il sistema di tool dell'assistente è modulare: la Fase 2 aggiungerà una tabell
 upload riservato all'admin e un tool `search_documents`, senza toccare la parte calendario.
 
 ## 6. Prerequisiti Google Workspace (da verificare prima dello sviluppo)
-- L'account dedicato `agenda@<dominio>` esiste e ha permesso di scrittura sul calendario condiviso.
+- L'account dedicato `agenda@<dominio>` esiste e ha permesso di scrittura sul calendario condiviso (e di eliminare gli eventi che ha creato).
 - La condivisione libero/occupato all'interno del dominio è attiva per tutti i 10 utenti (impostazione admin Workspace).
 - Primo task del piano: un test reale di WF1 su tutti i 10 indirizzi.
 
 ## 7. Lasciato al costruttore
 - Struttura delle cartelle, nomi dei componenti, libreria per il rate limit.
-- Algoritmo di calcolo degli slot (rispettando orario lavorativo e conflitti).
+- Algoritmo di calcolo degli slot (rispettando orario lavorativo, festività e conflitti).
 - Testi esatti dell'interfaccia e del system prompt.
 - Test: unità per calcolo slot, firma HMAC e verifica dominio; test RLS; e2e del flusso proposta → conferma con n8n simulato.
 
