@@ -37,6 +37,13 @@ export type AuditEntry = {
   details: Record<string, unknown>;
 };
 
+export type MessageRole = "user" | "assistant" | "tool";
+
+export type Conversation = { id: string; userId: string; title: string | null; createdAt: Date };
+
+/** Azione di audit registrata per ogni messaggio utente in chat: base del rate limit. */
+export const CHAT_MESSAGE_ACTION = "chat_message";
+
 export type Repo = {
   listColleagues(): Promise<{ email: string; fullName: string }[]>;
   getSettings(): Promise<{ workHours: WorkHours; closures: string[] }>;
@@ -50,6 +57,19 @@ export type Repo = {
     to: RequestStatus,
     patch?: Partial<EventRequest>,
   ): Promise<EventRequest | null>;
+  createConversation(userId: string, title: string | null): Promise<Conversation>;
+  /** Lancia se la conversation non appartiene a `userId`. */
+  appendMessage(
+    userId: string,
+    conversationId: string,
+    role: MessageRole,
+    content: unknown,
+  ): Promise<void>;
+  /**
+   * Conta le righe di audit_log con action `CHAT_MESSAGE_ACTION` e actor_id = userId da
+   * `since` in poi (append-only: non azzerabile dall'utente). Chi gestisce la chat deve
+   * scrivere quella riga di audit per ogni messaggio utente.
+   */
   countUserMessagesSince(userId: string, since: Date): Promise<number>;
   audit(entry: AuditEntry): Promise<void>;
 };
@@ -104,8 +124,9 @@ function fail(op: string, error: { message: string }): never {
 }
 
 /**
- * `userClient` (sessione dell'utente → RLS) per le letture; `serviceClient` per le scritture
- * su event_requests (sempre filtrate/inserite con lo `userId` dato) e per l'audit.
+ * `userClient` (sessione dell'utente → RLS) per le letture; `serviceClient` per tutte le
+ * scritture (event_requests, conversations, messages, audit — sempre con lo `userId` dato
+ * esplicitamente, perché service_role scavalca la RLS) e per il conteggio del rate limit.
  */
 export function createSupabaseRepo(userClient: DbClient, serviceClient: DbClient): Repo {
   return {
@@ -174,12 +195,44 @@ export function createSupabaseRepo(userClient: DbClient, serviceClient: DbClient
       return data ? rowToRequest(data) : null;
     },
 
-    async countUserMessagesSince(userId, since) {
-      const { count, error } = await userClient
+    async createConversation(userId, title) {
+      const { data, error } = await serviceClient
+        .from("conversations")
+        .insert({ user_id: userId, title })
+        .select()
+        .single();
+      if (error) fail("createConversation", error);
+      return {
+        id: data.id,
+        userId: data.user_id,
+        title: data.title,
+        createdAt: new Date(data.created_at),
+      };
+    },
+
+    async appendMessage(userId, conversationId, role, content) {
+      // La proprietà delle conversations non cambia mai (nessun update), quindi il
+      // controllo seguito dall'insert non ha finestre di corsa rilevanti.
+      const owned = await serviceClient
+        .from("conversations")
+        .select("id")
+        .eq("id", conversationId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (owned.error) fail("appendMessage", owned.error);
+      if (!owned.data) throw new Error("db appendMessage: conversation non trovata");
+      const { error } = await serviceClient
         .from("messages")
-        .select("id, conversations!inner(user_id)", { count: "exact", head: true })
-        .eq("role", "user")
-        .eq("conversations.user_id", userId)
+        .insert({ conversation_id: conversationId, role, content: content as NonNullable<Json> });
+      if (error) fail("appendMessage", error);
+    },
+
+    async countUserMessagesSince(userId, since) {
+      const { count, error } = await serviceClient
+        .from("audit_log")
+        .select("id", { count: "exact", head: true })
+        .eq("action", CHAT_MESSAGE_ACTION)
+        .eq("actor_id", userId)
         .gte("created_at", since.toISOString());
       if (error) fail("countUserMessagesSince", error);
       return count ?? 0;

@@ -121,7 +121,7 @@ export type Database = {
           created_at?: string;
           id?: string;
           title?: string | null;
-          user_id?: string;
+          user_id: string;
         };
         Update: {
           created_at?: string;
@@ -163,7 +163,7 @@ export type Database = {
           start_at: string;
           status?: string;
           title: string;
-          user_id?: string;
+          user_id: string;
         };
         Update: {
           attendee_emails?: string[];

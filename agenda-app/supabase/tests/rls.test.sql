@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(56);
+select plan(79);
 
 -- ---------------------------------------------------------------------------
 -- Fixture (come postgres, prima dell'impersonazione)
@@ -19,38 +19,50 @@ insert into public.allowed_users (email, full_name, role, active) values
   ('rls-ex@example.com',   'Ex Collega',  'user',  false),
   ('rls-new@example.com',  'Nuovo Test',  'user',  true);
 
--- Guardia di dominio ----------------------------------------------------------
+-- Guardia su auth.users ------------------------------------------------------
 select throws_ok(
-  $$ insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000f1', 'x@gmail.com') $$,
+  $$ insert into auth.users (id, email, raw_app_meta_data)
+     values ('00000000-0000-0000-0000-0000000000e1', 'rls-capo@example.com',
+             '{"provider":"email","providers":["email"]}') $$,
+  '42501', 'accesso negato: provider non consentito',
+  'auth.users: signup email/password rifiutato anche per un admin in rubrica'
+);
+select throws_ok(
+  $$ insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000e2', 'rls-a@example.com') $$,
+  '42501', 'accesso negato: provider non consentito',
+  'auth.users: utente senza provider rifiutato'
+);
+select throws_ok(
+  $$ insert into auth.users (id, email, raw_app_meta_data) values ('00000000-0000-0000-0000-0000000000f1', 'x@gmail.com', '{"provider":"google","providers":["google"]}') $$,
   '42501', 'accesso negato: email fuori dominio',
   'auth.users: email fuori dominio rifiutata'
 );
 select throws_ok(
-  $$ insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000f2', 'x@example.com@gmail.com') $$,
+  $$ insert into auth.users (id, email, raw_app_meta_data) values ('00000000-0000-0000-0000-0000000000f2', 'x@example.com@gmail.com', '{"provider":"google","providers":["google"]}') $$,
   '42501', 'accesso negato: email fuori dominio',
   'auth.users: email con più @ rifiutata'
 );
 select throws_ok(
-  $$ insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000f3', 'ignoto@example.com') $$,
+  $$ insert into auth.users (id, email, raw_app_meta_data) values ('00000000-0000-0000-0000-0000000000f3', 'ignoto@example.com', '{"provider":"google","providers":["google"]}') $$,
   '42501', 'accesso negato: utente non autorizzato',
   'auth.users: email di dominio ma assente da allowed_users rifiutata'
 );
 select throws_ok(
-  $$ insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000f4', 'rls-ex@example.com') $$,
+  $$ insert into auth.users (id, email, raw_app_meta_data) values ('00000000-0000-0000-0000-0000000000f4', 'rls-ex@example.com', '{"provider":"google","providers":["google"]}') $$,
   '42501', 'accesso negato: utente non autorizzato',
   'auth.users: utente disattivato rifiutato'
 );
 select throws_ok(
-  $$ insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000f5', 'x@sub.example.com') $$,
+  $$ insert into auth.users (id, email, raw_app_meta_data) values ('00000000-0000-0000-0000-0000000000f5', 'x@sub.example.com', '{"provider":"google","providers":["google"]}') $$,
   '42501', 'accesso negato: email fuori dominio',
   'auth.users: sottodominio rifiutato'
 );
 
 select lives_ok(
-  $$ insert into auth.users (id, email) values
-       ('00000000-0000-0000-0000-00000000000a', 'RLS-A@Example.com'),
-       ('00000000-0000-0000-0000-00000000000b', 'rls-b@example.com'),
-       ('00000000-0000-0000-0000-00000000000c', 'rls-capo@example.com') $$,
+  $$ insert into auth.users (id, email, raw_app_meta_data) values
+       ('00000000-0000-0000-0000-00000000000a', 'RLS-A@Example.com', '{"provider":"google","providers":["google"]}'),
+       ('00000000-0000-0000-0000-00000000000b', 'rls-b@example.com', '{"provider":"google","providers":["google"]}'),
+       ('00000000-0000-0000-0000-00000000000c', 'rls-capo@example.com', '{"provider":"google","providers":["google"]}') $$,
   'auth.users: utenti di dominio attivi accettati (email case-insensitive)'
 );
 
@@ -67,8 +79,18 @@ select is(
 
 select throws_ok(
   $$ update auth.users set email = 'rls-a@gmail.com' where id = '00000000-0000-0000-0000-00000000000a' $$,
-  '42501', 'accesso negato: email fuori dominio',
+  '42501', 'accesso negato: cambio email non consentito',
   'auth.users: cambio email verso un altro dominio rifiutato'
+);
+select throws_ok(
+  $$ update auth.users set email = 'rls-new@example.com' where id = '00000000-0000-0000-0000-00000000000a' $$,
+  '42501', 'accesso negato: cambio email non consentito',
+  'auth.users: cambio email verso un altro collega in rubrica rifiutato'
+);
+select lives_ok(
+  $$ update auth.users set last_sign_in_at = now(), email = email
+     where id = '00000000-0000-0000-0000-00000000000a' $$,
+  'auth.users: aggiornamenti senza cambio email consentiti'
 );
 
 -- Dati di A e B
@@ -119,6 +141,27 @@ select throws_ok(
   $$ insert into public.messages (conversation_id, role, content)
      values ('10000000-0000-0000-0000-00000000000b', 'user', '"intruso"') $$,
   '42501', null, 'A: non scrive messages nella conversation di B'
+);
+select throws_ok(
+  $$ insert into public.messages (conversation_id, role, content, created_at)
+     values ('10000000-0000-0000-0000-00000000000a', 'assistant', '"falso"', now() - interval '1 day') $$,
+  '42501', null, 'A: non scrive messages nemmeno nella propria conversation'
+);
+select throws_ok(
+  $$ delete from public.messages where conversation_id = '10000000-0000-0000-0000-00000000000a' $$,
+  '42501', null, 'A: non cancella i propri messages'
+);
+select throws_ok(
+  $$ insert into public.conversations (user_id, title) values ('00000000-0000-0000-0000-00000000000a', 'mia') $$,
+  '42501', null, 'A: non crea conversations (solo lato server)'
+);
+select throws_ok(
+  $$ update public.conversations set title = 'x' where id = '10000000-0000-0000-0000-00000000000a' $$,
+  '42501', null, 'A: non modifica le proprie conversations'
+);
+select throws_ok(
+  $$ delete from public.conversations where id = '10000000-0000-0000-0000-00000000000a' $$,
+  '42501', null, 'A: non cancella le proprie conversations (cronologia non azzerabile)'
 );
 select throws_ok(
   $$ update public.event_requests set title = 'hack'
@@ -187,8 +230,12 @@ select is(
   (select allowed_domain from public.app_settings), 'example.com', 'A: legge app_settings'
 );
 select is_empty(
-  $$ update public.app_settings set allowed_domain = 'gmail.com' returning id $$,
+  $$ update public.app_settings set work_hours = '{}' returning id $$,
   'A: non modifica app_settings'
+);
+select throws_ok(
+  $$ update public.app_settings set allowed_domain = 'gmail.com' $$,
+  '42501', null, 'A: nessun privilegio sul dominio di app_settings'
 );
 select throws_ok(
   $$ insert into public.closures (day, label) values ('2026-12-24', 'chiuso') $$,
@@ -214,6 +261,43 @@ select throws_ok(
 select lives_ok(
   $$ insert into public.allowed_users (email, full_name) values ('rls-z@example.com', 'Zeta Test') $$,
   'admin: inserisce in allowed_users'
+);
+select is(
+  (select created_by from public.allowed_users where email = 'rls-z@example.com'),
+  '00000000-0000-0000-0000-00000000000c'::uuid, 'admin: created_by impostato a auth.uid()'
+);
+select throws_ok(
+  $$ insert into public.allowed_users (email, full_name, created_by)
+     values ('rls-y@example.com', 'Y', '00000000-0000-0000-0000-00000000000a') $$,
+  '42501', null, 'admin: created_by non falsificabile'
+);
+select throws_ok(
+  $$ insert into public.allowed_users (email, full_name) values ('x@gmail.com', 'Esterno') $$,
+  '23514', 'email fuori dominio: x@gmail.com', 'admin: non inserisce esterni in allowed_users'
+);
+select throws_ok(
+  $$ insert into public.allowed_users (email, full_name) values ('x@sub.example.com', 'Sotto') $$,
+  '23514', null, 'admin: non inserisce sottodomini in allowed_users'
+);
+select throws_ok(
+  $$ update public.allowed_users set email = 'rls-b2@example.com' where email = 'rls-b@example.com' $$,
+  '42501', null, 'admin: email di allowed_users non modificabile'
+);
+select results_eq(
+  $$ update public.allowed_users set full_name = 'Bruno Nuovo', active = true
+     where email = 'rls-b@example.com' returning full_name $$,
+  $$ values ('Bruno Nuovo'::text) $$,
+  'admin: modifica nome/ruolo/attivo in allowed_users'
+);
+select throws_ok(
+  $$ update public.app_settings set allowed_domain = 'gmail.com' $$,
+  '42501', null, 'admin: il dominio di app_settings non è modificabile'
+);
+select results_eq(
+  $$ update public.app_settings set work_hours = '{"days":[1,2],"ranges":[]}', updated_at = now()
+     returning id $$,
+  $$ values (1) $$,
+  'admin: modifica gli orari in app_settings'
 );
 select lives_ok(
   $$ insert into public.closures (day, label) values ('2026-12-24', 'chiuso') $$,
@@ -247,6 +331,18 @@ select throws_ok(
 select throws_ok(
   $$ truncate public.audit_log $$,
   '42501', null, 'service_role: non svuota audit_log'
+);
+select throws_ok(
+  $$ insert into public.allowed_users (email, full_name) values ('x@gmail.com', 'Esterno') $$,
+  '23514', null, 'service_role: non inserisce esterni in allowed_users'
+);
+select lives_ok(
+  $$ with c as (
+       insert into public.conversations (user_id, title)
+       values ('00000000-0000-0000-0000-00000000000a', 'via server') returning id
+     )
+     insert into public.messages (conversation_id, role, content) select id, 'user', '"ciao"' from c $$,
+  'service_role: crea conversations e messages'
 );
 select lives_ok(
   $$ insert into public.event_requests (user_id, title, start_at, end_at)
@@ -291,6 +387,18 @@ select is(
   'RLS attiva su ogni tabella di public'
 );
 
+-- Privilegi di default per oggetti futuri: niente per anon, niente EXECUTE a PUBLIC.
+create function public.zz_probe_fn() returns int language sql as 'select 1';
+create table public.zz_probe_t (id int);
+select is(has_function_privilege('anon', 'public.zz_probe_fn()', 'execute'), false,
+  'default: anon non esegue funzioni nuove');
+select is(
+  coalesce((select bool_or(acl.grantee = 0) from pg_proc p, aclexplode(p.proacl) acl
+            where p.oid = 'public.zz_probe_fn()'::regprocedure), true),
+  false, 'default: EXECUTE non concesso a PUBLIC sulle funzioni nuove');
+select is(has_table_privilege('anon', 'public.zz_probe_t', 'select'), false,
+  'default: anon non legge tabelle nuove');
+
 -- Disattivare l'admin in allowed_users ha effetto immediato su is_admin().
 update public.allowed_users set active = false where email = 'rls-capo@example.com';
 set local role authenticated;
@@ -309,7 +417,7 @@ select is(
 -- Senza app_settings nessuna registrazione passa (fail closed).
 delete from public.app_settings;
 select throws_ok(
-  $$ insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000f6', 'rls-new@example.com') $$,
+  $$ insert into auth.users (id, email, raw_app_meta_data) values ('00000000-0000-0000-0000-0000000000f6', 'rls-new@example.com', '{"provider":"google","providers":["google"]}') $$,
   '42501', 'accesso negato: configurazione dominio assente',
   'auth.users: app_settings assente → rifiuto'
 );

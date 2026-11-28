@@ -3,17 +3,24 @@ import { createSupabaseRepo, type DbClient } from "./repo";
 
 type Call = { table: string; ops: [string, ...unknown[]][] };
 
-/** Client finto: registra la catena di chiamate e risolve con `result`. */
-function fakeClient(result: { data?: unknown; error?: unknown; count?: number }) {
+type Result = { data?: unknown; error?: unknown; count?: number };
+
+/**
+ * Client finto: registra la catena di chiamate; la n-esima chiamata a from()/rpc() risolve
+ * con l'n-esimo risultato (l'ultimo si ripete).
+ */
+function fakeClient(...results: Result[]) {
   const calls: Call[] = [];
+  const next = () => results[Math.min(calls.length - 1, results.length - 1)] ?? {};
   const client = {
     rpc(fn: string) {
       calls.push({ table: `rpc:${fn}`, ops: [] });
-      return Promise.resolve({ data: null, error: null, ...result });
+      return Promise.resolve({ data: null, error: null, ...next() });
     },
     from(table: string) {
       const call: Call = { table, ops: [] };
       calls.push(call);
+      const result = next();
       const builder: Record<string, unknown> = {};
       for (const op of ["select", "insert", "update", "eq", "gte", "order", "single", "maybeSingle"]) {
         builder[op] = (...args: unknown[]) => {
@@ -139,6 +146,59 @@ describe("createSupabaseRepo", () => {
     ]);
     expect(user.calls.map((c) => c.table)).toEqual(["rpc:list_colleagues"]);
     expect(service.calls).toHaveLength(0);
+  });
+
+  it("appendMessage: verifica la proprietà della conversation e poi inserisce via service", async () => {
+    const user = fakeClient({});
+    const service = fakeClient({ data: { id: "c1" } }, {});
+    await createSupabaseRepo(user.client, service.client).appendMessage("u1", "c1", "user", {
+      text: "ciao",
+    });
+    expect(user.calls).toHaveLength(0);
+    expect(service.calls.map((c) => c.table)).toEqual(["conversations", "messages"]);
+    expect(service.calls[0].ops).toContainEqual(["eq", "id", "c1"]);
+    expect(service.calls[0].ops).toContainEqual(["eq", "user_id", "u1"]);
+    expect(service.calls[1].ops[0]).toEqual([
+      "insert",
+      { conversation_id: "c1", role: "user", content: { text: "ciao" } },
+    ]);
+  });
+
+  it("appendMessage: conversation altrui → errore, nessun insert", async () => {
+    const service = fakeClient({ data: null });
+    await expect(
+      createSupabaseRepo(fakeClient({}).client, service.client).appendMessage("u1", "c2", "user", "x"),
+    ).rejects.toThrow("conversation non trovata");
+    expect(service.calls.map((c) => c.table)).toEqual(["conversations"]);
+  });
+
+  it("createConversation: via service client con user_id esplicito", async () => {
+    const service = fakeClient({
+      data: { id: "c1", user_id: "u1", title: "t", created_at: "2026-11-28T10:00:00+00:00" },
+    });
+    const c = await createSupabaseRepo(fakeClient({}).client, service.client).createConversation(
+      "u1",
+      "t",
+    );
+    expect(c).toEqual({ id: "c1", userId: "u1", title: "t", createdAt: new Date("2026-11-28T10:00:00Z") });
+    expect(service.calls[0].ops[0]).toEqual(["insert", { user_id: "u1", title: "t" }]);
+  });
+
+  it("countUserMessagesSince: conta le righe chat_message di audit_log dell'utente", async () => {
+    const user = fakeClient({});
+    const service = fakeClient({ count: 7 });
+    const since = new Date("2026-11-28T10:00:00Z");
+    expect(
+      await createSupabaseRepo(user.client, service.client).countUserMessagesSince("u1", since),
+    ).toBe(7);
+    expect(user.calls).toHaveLength(0);
+    expect(service.calls[0].table).toBe("audit_log");
+    expect(service.calls[0].ops).toEqual([
+      ["select", "id", { count: "exact", head: true }],
+      ["eq", "action", "chat_message"],
+      ["eq", "actor_id", "u1"],
+      ["gte", "created_at", since.toISOString()],
+    ]);
   });
 
   it("audit usa il client di servizio", async () => {

@@ -24,7 +24,7 @@ create table public.allowed_users (
   role text not null default 'user' check (role in ('user', 'admin')),
   active boolean not null default true,
   created_at timestamptz not null default now(),
-  created_by uuid references auth.users (id) on delete set null
+  created_by uuid default auth.uid() references auth.users (id) on delete set null
 );
 
 create table public.profiles (
@@ -37,7 +37,7 @@ create table public.profiles (
 
 create table public.conversations (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
   title text,
   created_at timestamptz not null default now()
 );
@@ -54,7 +54,7 @@ create index messages_conversation_id_idx on public.messages (conversation_id, c
 
 create table public.event_requests (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
   title text not null,
   description text,
   start_at timestamptz not null,
@@ -85,6 +85,8 @@ create table public.audit_log (
 );
 create index audit_log_created_at_idx on public.audit_log (created_at desc);
 create index audit_log_action_idx on public.audit_log (action, created_at desc);
+-- Rate limit chat: conteggio per attore/azione in una finestra temporale.
+create index audit_log_actor_action_idx on public.audit_log (actor_id, action, created_at);
 
 -- ---------------------------------------------------------------------------
 -- Funzioni
@@ -110,8 +112,10 @@ as $$
   );
 $$;
 
--- Guardia di dominio: rifiuta la creazione (o il cambio email) di utenti fuori dominio
--- o non attivi in allowed_users. Se app_settings manca rifiuta comunque (fail closed).
+-- Guardia sugli utenti di auth:
+-- - INSERT: solo provider Google (l'email è verificata da Google, non dichiarata dal client),
+--   email nel dominio di app_settings e attiva in allowed_users. Senza app_settings: rifiuto.
+-- - UPDATE: qualunque cambio di email è rifiutato (l'identità è legata all'email Google).
 create function public.guard_auth_user()
 returns trigger
 language plpgsql
@@ -122,9 +126,19 @@ declare
   v_domain text;
   v_email text := lower(new.email);
 begin
+  if tg_op = 'UPDATE' then
+    if new.email is distinct from old.email then
+      raise exception 'accesso negato: cambio email non consentito' using errcode = '42501';
+    end if;
+    return new;
+  end if;
+
   select s.allowed_domain into v_domain from public.app_settings s where s.id = 1;
   if v_domain is null then
     raise exception 'accesso negato: configurazione dominio assente' using errcode = '42501';
+  end if;
+  if coalesce(new.raw_app_meta_data ->> 'provider', '') <> 'google' then
+    raise exception 'accesso negato: provider non consentito' using errcode = '42501';
   end if;
   if v_email is null
      or v_email !~ '^[^@\s]+@[^@\s]+$'
@@ -153,17 +167,21 @@ begin
 end;
 $$;
 
-create function public.handle_auth_user_email_change()
+-- Nessun esterno in rubrica: l'email deve appartenere al dominio di app_settings
+-- (vale per chiunque scriva, admin o service_role). Senza app_settings: rifiuto.
+create function public.guard_allowed_user_domain()
 returns trigger
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_domain text;
 begin
-  update public.profiles p
-  set email = a.email, full_name = a.full_name, role = a.role
-  from public.allowed_users a
-  where p.id = new.id and a.email = lower(new.email);
+  select s.allowed_domain into v_domain from public.app_settings s where s.id = 1;
+  if v_domain is null or split_part(new.email, '@', 2) <> v_domain then
+    raise exception 'email fuori dominio: %', new.email using errcode = '23514';
+  end if;
   return new;
 end;
 $$;
@@ -203,17 +221,15 @@ create trigger guard_auth_user_insert
 
 create trigger guard_auth_user_email_update
   before update of email on auth.users
-  for each row when (new.email is distinct from old.email)
-  execute function public.guard_auth_user();
+  for each row execute function public.guard_auth_user();
 
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_auth_user();
 
-create trigger on_auth_user_email_changed
-  after update of email on auth.users
-  for each row when (new.email is distinct from old.email)
-  execute function public.handle_auth_user_email_change();
+create trigger guard_allowed_user_domain
+  before insert or update of email on public.allowed_users
+  for each row execute function public.guard_allowed_user_domain();
 
 create trigger sync_profile_on_allowed_user_update
   after update of full_name, role on public.allowed_users
@@ -255,12 +271,19 @@ revoke all on
 from public, anon, authenticated;
 revoke all on sequence public.audit_log_id_seq from public, anon, authenticated;
 
-grant select, update on public.app_settings to authenticated;
+-- Colonne scrivibili dall'admin: il dominio non si cambia dall'app, l'email di una voce
+-- in rubrica è immutabile (si disattiva e se ne crea un'altra).
+grant select on public.app_settings to authenticated;
+grant update (work_hours, updated_at) on public.app_settings to authenticated;
 grant select, insert, update, delete on public.closures to authenticated;
-grant select, insert, update on public.allowed_users to authenticated;
+grant select on public.allowed_users to authenticated;
+grant insert (email, full_name, role, active) on public.allowed_users to authenticated;
+grant update (full_name, role, active) on public.allowed_users to authenticated;
 grant select on public.profiles to authenticated;
-grant select, insert, update, delete on public.conversations to authenticated;
-grant select, insert on public.messages to authenticated;
+-- conversations / messages: solo lettura per l'utente; le scritture passano dal server
+-- (service_role), così la cronologia non è falsificabile né cancellabile dal client.
+grant select on public.conversations to authenticated;
+grant select on public.messages to authenticated;
 -- event_requests: l'utente legge le proprie; scritture solo lato server (service_role)
 -- dopo il controllo di proprietà, così lo stato non è manipolabile via PostgREST.
 grant select on public.event_requests to authenticated;
@@ -275,12 +298,14 @@ grant usage on sequence public.audit_log_id_seq to service_role;
 alter default privileges in schema public revoke all on tables from anon;
 alter default privileges in schema public revoke all on sequences from anon;
 alter default privileges in schema public revoke execute on functions from anon;
+-- EXECUTE a PUBLIC è un default globale: va revocato a livello globale (non per schema).
+alter default privileges revoke execute on functions from public;
 
 revoke execute on function
   public.is_admin(),
   public.guard_auth_user(),
   public.handle_new_auth_user(),
-  public.handle_auth_user_email_change(),
+  public.guard_allowed_user_domain(),
   public.sync_profile_from_allowed_user(),
   public.reject_audit_log_change(),
   public.list_colleagues()
@@ -333,26 +358,13 @@ create policy profiles_select on public.profiles
   for select to authenticated
   using (id = (select auth.uid()) or (select public.is_admin()));
 
--- conversations / messages: solo le proprie righe.
+-- conversations / messages: select delle proprie righe; nessuna policy di scrittura.
 create policy conversations_select on public.conversations
   for select to authenticated using (user_id = (select auth.uid()));
-create policy conversations_insert on public.conversations
-  for insert to authenticated with check (user_id = (select auth.uid()));
-create policy conversations_update on public.conversations
-  for update to authenticated
-  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
-create policy conversations_delete on public.conversations
-  for delete to authenticated using (user_id = (select auth.uid()));
 
 create policy messages_select on public.messages
   for select to authenticated
   using (exists (
-    select 1 from public.conversations c
-    where c.id = conversation_id and c.user_id = (select auth.uid())
-  ));
-create policy messages_insert on public.messages
-  for insert to authenticated
-  with check (exists (
     select 1 from public.conversations c
     where c.id = conversation_id and c.user_id = (select auth.uid())
   ));
