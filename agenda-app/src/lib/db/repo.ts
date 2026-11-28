@@ -41,6 +41,14 @@ export type MessageRole = "user" | "assistant" | "tool";
 
 export type Conversation = { id: string; userId: string; title: string | null; createdAt: Date };
 
+/** La conversation non esiste o non appartiene all'utente indicato. */
+export class ConversationNotFoundError extends Error {
+  constructor() {
+    super("db appendMessage: conversation non trovata");
+    this.name = "ConversationNotFoundError";
+  }
+}
+
 /** Azione di audit registrata per ogni messaggio utente in chat: base del rate limit. */
 export const CHAT_MESSAGE_ACTION = "chat_message";
 
@@ -58,7 +66,7 @@ export type Repo = {
     patch?: Partial<EventRequest>,
   ): Promise<EventRequest | null>;
   createConversation(userId: string, title: string | null): Promise<Conversation>;
-  /** Lancia se la conversation non appartiene a `userId`. */
+  /** Lancia `ConversationNotFoundError` se la conversation non appartiene a `userId`. */
   appendMessage(
     userId: string,
     conversationId: string,
@@ -220,7 +228,7 @@ export function createSupabaseRepo(userClient: DbClient, serviceClient: DbClient
         .eq("user_id", userId)
         .maybeSingle();
       if (owned.error) fail("appendMessage", owned.error);
-      if (!owned.data) throw new Error("db appendMessage: conversation non trovata");
+      if (!owned.data) throw new ConversationNotFoundError();
       const { error } = await serviceClient
         .from("messages")
         .insert({ conversation_id: conversationId, role, content: content as NonNullable<Json> });

@@ -1,12 +1,12 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { convertToModelMessages, safeValidateUIMessages, stepCountIs, streamText } from "ai";
 import type { NextRequest } from "next/server";
-import { parseChatBody } from "@/lib/agent/chat-body";
+import { MAX_BODY_CHARS, parseChatBody } from "@/lib/agent/chat-body";
 import { CONVERSATION_HEADER } from "@/lib/agent/limits";
 import { buildSystemPrompt } from "@/lib/agent/system-prompt";
 import { buildTools, type ChatMessage } from "@/lib/agent/tools";
 import { getApiUser } from "@/lib/auth/session";
-import { CHAT_MESSAGE_ACTION } from "@/lib/db/repo";
+import { CHAT_MESSAGE_ACTION, ConversationNotFoundError } from "@/lib/db/repo";
 import { serverEnv } from "@/lib/env";
 import { forbidden, isSameOrigin, jsonError, unauthorized } from "@/lib/http/api";
 import { createRequestDeps } from "@/lib/requests/deps";
@@ -24,6 +24,10 @@ export async function POST(request: NextRequest) {
   const user = await getApiUser();
   if (!user) return unauthorized();
   if (!isSameOrigin(request)) return forbidden();
+
+  // Rifiuta i corpi enormi prima di leggerli (4 byte per carattere UTF-8 al massimo).
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > MAX_BODY_CHARS * 4) return jsonError(413, "Messaggio troppo lungo.");
 
   const body = parseChatBody(await request.text());
   if (!body) return jsonError(400, "Messaggio non valido.");
@@ -44,7 +48,7 @@ export async function POST(request: NextRequest) {
   try {
     await deps.repo.appendMessage(user.id, conversationId, "user", body.userMessage);
   } catch (err) {
-    if (err instanceof Error && err.message.includes("conversation non trovata")) {
+    if (err instanceof ConversationNotFoundError) {
       return jsonError(404, "Conversazione non trovata.");
     }
     throw err;

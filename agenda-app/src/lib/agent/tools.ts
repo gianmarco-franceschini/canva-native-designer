@@ -173,7 +173,7 @@ export function buildTools(deps: Deps, user: User) {
           const names = new Map(
             (await deps.repo.listColleagues()).map((c) => [c.email.toLowerCase(), c.fullName]),
           );
-          const nameOf = (email: string) => names.get(email) ?? email;
+          const nameOf = (email: string) => names.get(email.toLowerCase()) ?? email;
           return {
             requestId: r.request.id,
             title: r.request.title,

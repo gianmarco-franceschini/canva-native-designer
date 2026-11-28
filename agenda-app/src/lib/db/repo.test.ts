@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSupabaseRepo, type DbClient } from "./repo";
+import { ConversationNotFoundError, createSupabaseRepo, type DbClient } from "./repo";
 
 type Call = { table: string; ops: [string, ...unknown[]][] };
 
@@ -168,7 +168,7 @@ describe("createSupabaseRepo", () => {
     const service = fakeClient({ data: null });
     await expect(
       createSupabaseRepo(fakeClient({}).client, service.client).appendMessage("u1", "c2", "user", "x"),
-    ).rejects.toThrow("conversation non trovata");
+    ).rejects.toBeInstanceOf(ConversationNotFoundError);
     expect(service.calls.map((c) => c.table)).toEqual(["conversations"]);
   });
 
