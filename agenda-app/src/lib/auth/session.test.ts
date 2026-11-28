@@ -37,7 +37,7 @@ vi.mock("@/lib/supabase/admin", () => ({
   }),
 }));
 
-const { requireUser, requireAdmin } = await import("./session");
+const { requireUser, requireAdmin, getApiUser } = await import("./session");
 
 const googleUser = (over: Record<string, unknown> = {}) => ({
   id: "u1",
@@ -123,5 +123,34 @@ describe("requireAdmin", () => {
 
   it("non admin → 404", async () => {
     await expect(requireAdmin()).rejects.toThrow("NOT_FOUND");
+  });
+});
+
+describe("getApiUser", () => {
+  it("senza sessione → null, senza logout", async () => {
+    m.user = null;
+    await expect(getApiUser()).resolves.toBeNull();
+    expect(m.signOut).not.toHaveBeenCalled();
+  });
+
+  it("utente attivo → utente", async () => {
+    await expect(getApiUser()).resolves.toEqual({
+      id: "u1",
+      email: "mario@example.com",
+      fullName: "Mario Rossi",
+      role: "user",
+    });
+  });
+
+  it("utente disattivato → null e logout (ricontrolla allowed_users)", async () => {
+    m.row = { full_name: "M", role: "user", active: false };
+    await expect(getApiUser()).resolves.toBeNull();
+    expect(m.signOut).toHaveBeenCalledOnce();
+    expect(m.queries).toHaveLength(1);
+  });
+
+  it("errore di lettura di allowed_users → lancia", async () => {
+    m.rowError = { message: "boom" };
+    await expect(getApiUser()).rejects.toThrow("allowed_users: boom");
   });
 });

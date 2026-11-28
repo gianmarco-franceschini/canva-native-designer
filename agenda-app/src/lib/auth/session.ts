@@ -35,18 +35,19 @@ export async function findActiveAllowedUser(
   return { fullName: data.full_name, role: data.role };
 }
 
+type SessionCheck = { kind: "none" } | { kind: "denied" } | { kind: "ok"; user: SessionUser };
+
 /**
- * Utente della sessione corrente, verificato a ogni chiamata: sessione valida (getUser
- * verifica il token presso Supabase), account Google del dominio e voce ancora attiva in
- * `allowed_users`, da cui provengono nome e ruolo. Senza sessione → `/login`; utente non
- * più autorizzato → logout e `/login?error=denied`.
+ * Verifica la sessione corrente a ogni chiamata: sessione valida (getUser verifica il token
+ * presso Supabase), account Google del dominio e voce ancora attiva in `allowed_users`, da
+ * cui provengono nome e ruolo. Un utente non più autorizzato viene disconnesso.
  */
-export async function requireUser(): Promise<SessionUser> {
+async function checkSession(): Promise<SessionCheck> {
   const supabase = await createServerSupabase();
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) redirect(LOGIN_PATH);
+  if (!user) return { kind: "none" };
 
   const email = user.email?.toLowerCase();
   const allowed =
@@ -60,10 +61,34 @@ export async function requireUser(): Promise<SessionUser> {
     } catch {
       // Il rifiuto non dipende dall'esito del logout.
     }
-    redirect(DENIED_PATH);
+    return { kind: "denied" };
   }
 
-  return { id: user.id, email, fullName: allowed.fullName, role: allowed.role };
+  return {
+    kind: "ok",
+    user: { id: user.id, email, fullName: allowed.fullName, role: allowed.role },
+  };
+}
+
+/**
+ * Utente della sessione corrente (vedi `checkSession`). Senza sessione → `/login`; utente
+ * non più autorizzato → logout e `/login?error=denied`.
+ */
+export async function requireUser(): Promise<SessionUser> {
+  const s = await checkSession();
+  if (s.kind === "none") redirect(LOGIN_PATH);
+  if (s.kind === "denied") redirect(DENIED_PATH);
+  return s.user;
+}
+
+/**
+ * Variante per le route API: stessi controlli di `requireUser`, ma senza redirect.
+ * Restituisce null se non c'è sessione o l'utente non è (più) autorizzato: la route
+ * risponde 401.
+ */
+export async function getApiUser(): Promise<SessionUser | null> {
+  const s = await checkSession();
+  return s.kind === "ok" ? s.user : null;
 }
 
 /** Come `requireUser`, ma risponde 404 a chi non è admin (non rivela l'esistenza della pagina). */
