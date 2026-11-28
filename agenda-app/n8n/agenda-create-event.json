@@ -1,0 +1,578 @@
+{
+  "name": "Agenda - create-event",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agenda-create-event",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "e7c2adb0-9db8-435b-80a1-96c7557cdac5",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "fd6e71ed-b68e-4b36-866f-783424e60bbc"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Verifica firma HMAC: X-Signature = hex(HMAC-SHA256(secret, X-Timestamp + \".\" + rawBody)).\n// La funzione seguente è copiata identica da agenda-app/n8n/verify-signature.js\n// (stesso algoritmo di verifyRequest in agenda-app/src/lib/n8n/sign.ts).\nfunction verifyAgendaSignature(rawBody, secret, timestampMs, signature, nowMs) {\n  const crypto = require('crypto');\n  const MAX_SKEW_MS = 5 * 60 * 1000;\n  if (!Number.isFinite(timestampMs) || Math.abs(nowMs - timestampMs) > MAX_SKEW_MS) return false;\n  if (typeof signature !== 'string' || !/^[0-9a-f]{64}$/i.test(signature)) return false;\n  const expected = Buffer.from(\n    crypto.createHmac('sha256', secret).update(timestampMs + '.' + rawBody).digest('hex'),\n    'hex',\n  );\n  const given = Buffer.from(signature, 'hex');\n  if (expected.length !== given.length) return false;\n  return crypto.timingSafeEqual(expected, given);\n}\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nlet rawBody = '';\nconst bin = item.binary && item.binary.data;\nif (bin) {\n  try {\n    rawBody = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\n  } catch (e) {\n    rawBody = Buffer.from(bin.data || '', 'base64').toString('utf8');\n  }\n}\nconst tsHeader = String(headers['x-timestamp'] ?? '');\nconst timestampMs = /^\\d{1,16}$/.test(tsHeader) ? Number(tsHeader) : NaN;\nconst signature = String(headers['x-signature'] ?? '');\nconst secret = $vars.AGENDA_WEBHOOK_SECRET;\nconst authorized =\n  typeof secret === 'string' &&\n  secret.length > 0 &&\n  verifyAgendaSignature(rawBody, secret, timestampMs, signature, Date.now());\nlet body = null;\nif (authorized) {\n  try {\n    body = JSON.parse(rawBody);\n  } catch (e) {\n    body = null; // firma valida ma JSON non valido: lo rifiuta \"Valida input\" con 400\n  }\n}\nreturn [{ json: { authorized, body } }];"
+      },
+      "id": "6eedc0cf-70db-4a0a-8203-f6dbb8b775bb",
+      "name": "Verifica firma",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f8ec1f62-955d-4cf1-8887-b3ad7b789686",
+              "leftValue": "={{ $json.authorized }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "08140bf9-503f-4929-811d-1996ebc17b60",
+      "name": "Firma valida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json.body;\nconst fail = (message) => [{ json: { ok: false, statusCode: 400, body: { error: 'invalid_input', message } } }];\nconst EMAIL = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nconst normEmail = (e) => (typeof e === 'string' ? e.trim().toLowerCase() : '');\nconst isDate = (s) => typeof s === 'string' && !Number.isNaN(Date.parse(s));\nif (!body || typeof body !== 'object' || Array.isArray(body)) return fail('body mancante o non valido');\nconst calendarId = $vars.AGENDA_SHARED_CALENDAR_ID;\nif (typeof calendarId !== 'string' || calendarId.length === 0) {\n  return [{ json: { ok: false, statusCode: 500, body: { error: 'misconfigured' } } }];\n}\nif (typeof body.requestId !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(body.requestId)) return fail('requestId');\nconst title = typeof body.title === 'string' ? body.title.trim() : '';\nif (title.length < 1 || title.length > 200) return fail('title');\nif (typeof body.description !== 'string') return fail('description');\nif (!isDate(body.start) || !isDate(body.end)) return fail('start/end');\nconst startMs = Date.parse(body.start);\nconst endMs = Date.parse(body.end);\nif (!(endMs > startMs) || endMs - startMs > 8 * 60 * 60 * 1000) return fail('durata');\nconst organizerEmail = normEmail(body.organizerEmail);\nif (!EMAIL.test(organizerEmail)) return fail('organizerEmail');\nif (!Array.isArray(body.attendeeEmails) || body.attendeeEmails.length < 1) return fail('attendeeEmails');\nconst others = body.attendeeEmails.map(normEmail);\nif (others.some((e) => !EMAIL.test(e))) return fail('attendeeEmails');\n// Invitati = organizzatore + partecipanti, senza duplicati (max 15 come il freebusy).\nconst attendees = [...new Set([organizerEmail, ...others])];\nif (attendees.length > 15) return fail('attendeeEmails');\nif (typeof body.allowConflict !== 'boolean') return fail('allowConflict');\nreturn [{\n  json: {\n    ok: true,\n    calendarId,\n    requestId: body.requestId,\n    title,\n    description: body.description,\n    start: new Date(startMs).toISOString(),\n    end: new Date(endMs).toISOString(),\n    organizerEmail,\n    attendees,\n    allowConflict: body.allowConflict,\n  },\n}];"
+      },
+      "id": "4b438a2f-3eff-4678-8773-18fc5d8c2e3d",
+      "name": "Valida input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "fa01a804-f32b-4f46-8361-a3321d2d0060",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "73e8670c-aa71-4fc0-8b5b-84c61eaa70dc",
+      "name": "Input valido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/{{ encodeURIComponent($('Valida input').first().json.calendarId) }}/events",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "privateExtendedProperty",
+              "value": "=agendaRequestId={{ $json.requestId }}"
+            },
+            {
+              "name": "showDeleted",
+              "value": "false"
+            },
+            {
+              "name": "maxResults",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 8000
+        }
+      },
+      "id": "031d4d99-8867-484a-8cac-85f12a6cea0a",
+      "name": "Cerca evento esistente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar agenda@"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Idempotenza: se esiste già un evento con questo agendaRequestId lo restituisce.\nconst calendarError = () => [{ json: { respond: true, statusCode: 502, body: { error: 'calendar_error' } } }];\nconst res = $input.first().json;\nconst v = $('Valida input').first().json;\nif (res.statusCode !== 200 || !res.body) return calendarError();\nconst items = Array.isArray(res.body.items) ? res.body.items : [];\nconst existing = items.find(\n  (e) =>\n    e &&\n    e.status !== 'cancelled' &&\n    e.extendedProperties &&\n    e.extendedProperties.private &&\n    e.extendedProperties.private.agendaRequestId === v.requestId,\n);\nif (existing) {\n  return [{\n    json: {\n      respond: true,\n      statusCode: 200,\n      body: { status: 'created', eventId: String(existing.id), htmlLink: String(existing.htmlLink || '') },\n    },\n  }];\n}\nreturn [{ json: { respond: false, emails: v.attendees, timeMin: v.start, timeMax: v.end } }];"
+      },
+      "id": "8eca250b-d8f9-4d44-8477-24c0e8eb6713",
+      "name": "Evento già creato?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "dba00a1d-32e8-4bb9-88e3-b665950a5f76",
+              "leftValue": "={{ $json.respond }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b9a4bd1e-2f63-4eaf-856d-4c7ae6571dba",
+      "name": "Rispondi subito?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/calendar/v3/freeBusy",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ timeMin: $json.timeMin, timeMax: $json.timeMax, timeZone: 'Europe/Rome', items: $json.emails.map((id) => ({ id })) }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 8000
+        }
+      },
+      "id": "a835e89e-5732-4337-8c7e-39ee423235a4",
+      "name": "FreeBusy partecipanti",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar agenda@"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Conflitti sui calendari di organizzatore e partecipanti (il calendario condiviso non conta).\nconst calendarError = () => [{ json: { respond: true, statusCode: 502, body: { error: 'calendar_error' } } }];\nconst res = $input.first().json;\nconst v = $('Valida input').first().json;\nif (res.statusCode !== 200 || !res.body || typeof res.body.calendars !== 'object' || res.body.calendars === null) {\n  return calendarError();\n}\nconst source = {};\nfor (const [id, cal] of Object.entries(res.body.calendars)) source[id.toLowerCase()] = cal;\nconst startMs = Date.parse(v.start);\nconst endMs = Date.parse(v.end);\nconst busy = {};\nfor (const email of v.attendees) {\n  const cal = source[email];\n  if (!cal || (Array.isArray(cal.errors) && cal.errors.length > 0)) {\n    // Errore di lettura = occupato per tutto l'intervallo, mai libero.\n    busy[email] = [{ start: v.start, end: v.end }];\n    continue;\n  }\n  const overlapping = (Array.isArray(cal.busy) ? cal.busy : [])\n    .filter((b) => Date.parse(b.start) < endMs && Date.parse(b.end) > startMs)\n    .map((b) => ({ start: String(b.start), end: String(b.end) }));\n  if (overlapping.length > 0) busy[email] = overlapping;\n}\nif (Object.keys(busy).length > 0 && !v.allowConflict) {\n  return [{ json: { respond: true, statusCode: 200, body: { status: 'conflict', busy } } }];\n}\nconst eventBody = {\n  summary: v.title,\n  description: v.description + '\\n\\nCreato da ' + v.organizerEmail + ' tramite Agenda aziendale',\n  start: { dateTime: v.start, timeZone: 'Europe/Rome' },\n  end: { dateTime: v.end, timeZone: 'Europe/Rome' },\n  attendees: v.attendees.map((email) => ({ email })),\n  extendedProperties: { private: { agendaRequestId: v.requestId } },\n};\nreturn [{ json: { respond: false, eventBody } }];"
+      },
+      "id": "ecc5855f-b1cf-4203-8156-55bbd8db33e5",
+      "name": "Valuta conflitti",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bc725767-2434-4930-8af0-dfb052e0b4bf",
+              "leftValue": "={{ $json.respond }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "61e6b236-1650-48c8-87e4-6b23e385c445",
+      "name": "Conflitto bloccante?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/{{ encodeURIComponent($('Valida input').first().json.calendarId) }}/events",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "sendUpdates",
+              "value": "all"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.eventBody) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 8000
+        }
+      },
+      "id": "5f1e76fc-f647-48d6-8ec2-05a3839927fb",
+      "name": "Crea evento",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar agenda@"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const calendarError = () => [{ json: { respond: true, statusCode: 502, body: { error: 'calendar_error' } } }];\nconst res = $input.first().json;\nif (res.statusCode !== 200 || !res.body || typeof res.body.id !== 'string') return calendarError();\nreturn [{\n  json: {\n    respond: true,\n    statusCode: 200,\n    body: { status: 'created', eventId: res.body.id, htmlLink: String(res.body.htmlLink || '') },\n  },\n}];"
+      },
+      "id": "63c9cf8e-4804-41cf-83ed-c0d509deb5e2",
+      "name": "Prepara risposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "d2a47aed-01cc-4f4d-8de6-280800bda5e0",
+      "name": "Rispondi",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2860,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"error\": \"unauthorized\"\n}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "88d66c82-b2ad-4580-8b64-6087f390820b",
+      "name": "Rispondi 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verifica firma",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verifica firma": {
+      "main": [
+        [
+          {
+            "node": "Firma valida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firma valida?": {
+      "main": [
+        [
+          {
+            "node": "Valida input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rispondi 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valida input": {
+      "main": [
+        [
+          {
+            "node": "Input valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input valido?": {
+      "main": [
+        [
+          {
+            "node": "Cerca evento esistente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rispondi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cerca evento esistente": {
+      "main": [
+        [
+          {
+            "node": "Evento già creato?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evento già creato?": {
+      "main": [
+        [
+          {
+            "node": "Rispondi subito?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rispondi subito?": {
+      "main": [
+        [
+          {
+            "node": "Rispondi",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FreeBusy partecipanti",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FreeBusy partecipanti": {
+      "main": [
+        [
+          {
+            "node": "Valuta conflitti",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valuta conflitti": {
+      "main": [
+        [
+          {
+            "node": "Conflitto bloccante?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conflitto bloccante?": {
+      "main": [
+        [
+          {
+            "node": "Rispondi",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Crea evento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crea evento": {
+      "main": [
+        [
+          {
+            "node": "Prepara risposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepara risposta": {
+      "main": [
+        [
+          {
+            "node": "Rispondi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

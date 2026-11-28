@@ -1,0 +1,308 @@
+{
+  "name": "Agenda - freebusy",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agenda-freebusy",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "879557a4-1592-4e2b-8920-2eab92ada934",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "a2e90710-95a2-4efa-8797-8e06120acced"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Verifica firma HMAC: X-Signature = hex(HMAC-SHA256(secret, X-Timestamp + \".\" + rawBody)).\n// La funzione seguente è copiata identica da agenda-app/n8n/verify-signature.js\n// (stesso algoritmo di verifyRequest in agenda-app/src/lib/n8n/sign.ts).\nfunction verifyAgendaSignature(rawBody, secret, timestampMs, signature, nowMs) {\n  const crypto = require('crypto');\n  const MAX_SKEW_MS = 5 * 60 * 1000;\n  if (!Number.isFinite(timestampMs) || Math.abs(nowMs - timestampMs) > MAX_SKEW_MS) return false;\n  if (typeof signature !== 'string' || !/^[0-9a-f]{64}$/i.test(signature)) return false;\n  const expected = Buffer.from(\n    crypto.createHmac('sha256', secret).update(timestampMs + '.' + rawBody).digest('hex'),\n    'hex',\n  );\n  const given = Buffer.from(signature, 'hex');\n  if (expected.length !== given.length) return false;\n  return crypto.timingSafeEqual(expected, given);\n}\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nlet rawBody = '';\nconst bin = item.binary && item.binary.data;\nif (bin) {\n  try {\n    rawBody = (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8');\n  } catch (e) {\n    rawBody = Buffer.from(bin.data || '', 'base64').toString('utf8');\n  }\n}\nconst tsHeader = String(headers['x-timestamp'] ?? '');\nconst timestampMs = /^\\d{1,16}$/.test(tsHeader) ? Number(tsHeader) : NaN;\nconst signature = String(headers['x-signature'] ?? '');\nconst secret = $vars.AGENDA_WEBHOOK_SECRET;\nconst authorized =\n  typeof secret === 'string' &&\n  secret.length > 0 &&\n  verifyAgendaSignature(rawBody, secret, timestampMs, signature, Date.now());\nlet body = null;\nif (authorized) {\n  try {\n    body = JSON.parse(rawBody);\n  } catch (e) {\n    body = null; // firma valida ma JSON non valido: lo rifiuta \"Valida input\" con 400\n  }\n}\nreturn [{ json: { authorized, body } }];"
+      },
+      "id": "92981225-8e55-4425-8402-02d735f58812",
+      "name": "Verifica firma",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f8ec1f62-955d-4cf1-8887-b3ad7b789686",
+              "leftValue": "={{ $json.authorized }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "238c6d5d-a52b-4d93-8b9c-2ae7af7a95b4",
+      "name": "Firma valida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json.body;\nconst fail = (message) => [{ json: { ok: false, statusCode: 400, body: { error: 'invalid_input', message } } }];\nconst EMAIL = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nconst normEmail = (e) => (typeof e === 'string' ? e.trim().toLowerCase() : '');\nconst isDate = (s) => typeof s === 'string' && !Number.isNaN(Date.parse(s));\nif (!body || typeof body !== 'object' || Array.isArray(body)) return fail('body mancante o non valido');\n// Stessi limiti del client (agenda-app/src/lib/n8n/client.ts): max 15 email, max 14 giorni.\nif (!Array.isArray(body.emails)) return fail('emails');\nconst emails = [...new Set(body.emails.map(normEmail))];\nif (emails.length < 1 || emails.length > 15 || emails.some((e) => !EMAIL.test(e))) return fail('emails');\nif (!isDate(body.timeMin) || !isDate(body.timeMax)) return fail('timeMin/timeMax');\nconst min = Date.parse(body.timeMin);\nconst max = Date.parse(body.timeMax);\nif (!(max > min) || max - min > 14 * 24 * 60 * 60 * 1000) return fail('intervallo');\nreturn [{ json: { ok: true, emails, timeMin: new Date(min).toISOString(), timeMax: new Date(max).toISOString() } }];"
+      },
+      "id": "07ea08a1-eab5-4be0-8dc2-9b60f481e291",
+      "name": "Valida input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "fa01a804-f32b-4f46-8361-a3321d2d0060",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c03ae898-0e2d-4057-8520-a20c8a80574b",
+      "name": "Input valido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/calendar/v3/freeBusy",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ timeMin: $json.timeMin, timeMax: $json.timeMax, timeZone: 'Europe/Rome', items: $json.emails.map((id) => ({ id })) }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 8000
+        }
+      },
+      "id": "0c080831-8c94-4bea-8814-866ce0d04837",
+      "name": "Google FreeBusy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar agenda@"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Solo intervalli occupato/libero: nessun titolo o dettaglio di eventi esce da qui.\nconst calendarError = () => [{ json: { respond: true, statusCode: 502, body: { error: 'calendar_error' } } }];\nconst res = $input.first().json;\nconst { emails } = $('Valida input').first().json;\nif (res.statusCode !== 200 || !res.body || typeof res.body.calendars !== 'object' || res.body.calendars === null) {\n  return calendarError();\n}\nconst source = {};\nfor (const [id, cal] of Object.entries(res.body.calendars)) source[id.toLowerCase()] = cal;\nconst calendars = {};\nfor (const email of emails) {\n  const cal = source[email];\n  if (!cal || (Array.isArray(cal.errors) && cal.errors.length > 0)) {\n    // Calendario illeggibile: l'app lo tratta come occupato per tutto l'intervallo.\n    const reason = cal && cal.errors[0] && cal.errors[0].reason;\n    calendars[email] = { error: typeof reason === 'string' ? reason : 'notFound' };\n  } else {\n    calendars[email] = {\n      busy: (Array.isArray(cal.busy) ? cal.busy : []).map((b) => ({ start: String(b.start), end: String(b.end) })),\n    };\n  }\n}\nreturn [{ json: { respond: true, statusCode: 200, body: { calendars } } }];"
+      },
+      "id": "a7b4717b-6fa5-46f0-84cf-12814526ed25",
+      "name": "Prepara risposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "221bb6f4-a23f-4f8e-8e15-e267ac52d5aa",
+      "name": "Rispondi",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\n  \"error\": \"unauthorized\"\n}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "b30ebfbe-f202-46e5-80f1-307997484372",
+      "name": "Rispondi 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verifica firma",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verifica firma": {
+      "main": [
+        [
+          {
+            "node": "Firma valida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firma valida?": {
+      "main": [
+        [
+          {
+            "node": "Valida input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rispondi 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valida input": {
+      "main": [
+        [
+          {
+            "node": "Input valido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input valido?": {
+      "main": [
+        [
+          {
+            "node": "Google FreeBusy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Rispondi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google FreeBusy": {
+      "main": [
+        [
+          {
+            "node": "Prepara risposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepara risposta": {
+      "main": [
+        [
+          {
+            "node": "Rispondi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
