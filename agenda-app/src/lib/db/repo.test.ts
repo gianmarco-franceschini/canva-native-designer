@@ -7,6 +7,10 @@ type Call = { table: string; ops: [string, ...unknown[]][] };
 function fakeClient(result: { data?: unknown; error?: unknown; count?: number }) {
   const calls: Call[] = [];
   const client = {
+    rpc(fn: string) {
+      calls.push({ table: `rpc:${fn}`, ops: [] });
+      return Promise.resolve({ data: null, error: null, ...result });
+    },
     from(table: string) {
       const call: Call = { table, ops: [] };
       calls.push(call);
@@ -64,12 +68,13 @@ describe("createSupabaseRepo", () => {
     });
   });
 
-  it("transitionRequest: un solo UPDATE filtrato per id, user_id e stato di partenza", async () => {
+  it("transitionRequest: un solo UPDATE via service client filtrato per id, user_id e stato", async () => {
+    const user = fakeClient({});
     const { client, calls } = fakeClient({
       data: { ...row, status: "confirmed", confirmed_at: "2026-11-28T11:00:00+00:00" },
     });
     const confirmedAt = new Date("2026-11-28T11:00:00Z");
-    const r = await createSupabaseRepo(client, client).transitionRequest(
+    const r = await createSupabaseRepo(user.client, client).transitionRequest(
       "r1",
       "u1",
       "confirming",
@@ -77,6 +82,7 @@ describe("createSupabaseRepo", () => {
       { googleEventId: "g1", confirmedAt, userId: "intruso", status: "cancelled" },
     );
     expect(r?.confirmedAt).toEqual(confirmedAt);
+    expect(user.calls).toHaveLength(0);
     expect(calls).toHaveLength(1);
     expect(calls[0].table).toBe("event_requests");
     expect(calls[0].ops).toEqual([
@@ -94,6 +100,45 @@ describe("createSupabaseRepo", () => {
     expect(
       await createSupabaseRepo(client, client).transitionRequest("r1", "u1", "pending", "confirming"),
     ).toBeNull();
+  });
+
+  it("insertRequest: via service client con user_id esplicito", async () => {
+    const user = fakeClient({});
+    const service = fakeClient({ data: { ...row, status: "pending" } });
+    const r = await createSupabaseRepo(user.client, service.client).insertRequest({
+      userId: "u1",
+      title: "Riunione",
+      description: null,
+      startAt: new Date("2026-12-01T08:00:00Z"),
+      endAt: new Date("2026-12-01T09:00:00Z"),
+      attendeeEmails: ["giulia@d.it"],
+      conflictSnapshot: null,
+    });
+    expect(r.status).toBe("pending");
+    expect(user.calls).toHaveLength(0);
+    expect(service.calls[0].table).toBe("event_requests");
+    expect(service.calls[0].ops[0]).toEqual([
+      "insert",
+      {
+        user_id: "u1",
+        title: "Riunione",
+        description: null,
+        start_at: "2026-12-01T08:00:00.000Z",
+        end_at: "2026-12-01T09:00:00.000Z",
+        attendee_emails: ["giulia@d.it"],
+        conflict_snapshot: null,
+      },
+    ]);
+  });
+
+  it("listColleagues: chiama list_colleagues() con il client utente", async () => {
+    const user = fakeClient({ data: [{ email: "giulia@d.it", full_name: "Giulia Bianchi" }] });
+    const service = fakeClient({});
+    expect(await createSupabaseRepo(user.client, service.client).listColleagues()).toEqual([
+      { email: "giulia@d.it", fullName: "Giulia Bianchi" },
+    ]);
+    expect(user.calls.map((c) => c.table)).toEqual(["rpc:list_colleagues"]);
+    expect(service.calls).toHaveLength(0);
   });
 
   it("audit usa il client di servizio", async () => {

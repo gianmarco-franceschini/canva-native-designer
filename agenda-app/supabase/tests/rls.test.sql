@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(53);
+select plan(56);
 
 -- ---------------------------------------------------------------------------
 -- Fixture (come postgres, prima dell'impersonazione)
@@ -120,15 +120,15 @@ select throws_ok(
      values ('10000000-0000-0000-0000-00000000000b', 'user', '"intruso"') $$,
   '42501', null, 'A: non scrive messages nella conversation di B'
 );
-select is_empty(
+select throws_ok(
   $$ update public.event_requests set title = 'hack'
-     where id = '20000000-0000-0000-0000-00000000000b' returning id $$,
-  'A: non modifica le event_requests di B'
+     where id = '20000000-0000-0000-0000-00000000000b' $$,
+  '42501', null, 'A: non modifica le event_requests di B'
 );
 select throws_ok(
-  $$ update public.event_requests set user_id = '00000000-0000-0000-0000-00000000000b'
+  $$ update public.event_requests set status = 'confirmed', google_event_id = 'finto'
      where id = '20000000-0000-0000-0000-00000000000a' $$,
-  '42501', null, 'A: non può cedere la propria richiesta a B'
+  '42501', null, 'A: non modifica nemmeno le proprie event_requests (stato non manipolabile)'
 );
 select throws_ok(
   $$ insert into public.event_requests (user_id, title, start_at, end_at)
@@ -140,10 +140,10 @@ select throws_ok(
      values ('già confermata', now(), now() + interval '1 hour', 'confirmed') $$,
   '42501', null, 'A: non crea event_requests già confermate'
 );
-select lives_ok(
-  $$ insert into public.event_requests (title, start_at, end_at)
-     values ('mia', now(), now() + interval '1 hour') $$,
-  'A: crea le proprie event_requests (user_id di default = auth.uid())'
+select throws_ok(
+  $$ insert into public.event_requests (user_id, title, start_at, end_at)
+     values ('00000000-0000-0000-0000-00000000000a', 'mia', now(), now() + interval '1 hour') $$,
+  '42501', null, 'A: non inserisce event_requests nemmeno a proprio nome (solo lato server)'
 );
 select is_empty($$ select 1 from public.audit_log $$, 'A: non legge audit_log');
 select throws_ok(
@@ -163,16 +163,16 @@ select throws_ok(
   '42501', null, 'A: nessun privilegio delete su allowed_users'
 );
 select is_empty(
-  $$ select 1 from public.allowed_users where email = 'rls-ex@example.com' $$,
-  'A: non vede utenti disattivati'
+  $$ select 1 from public.allowed_users $$,
+  'A: non legge allowed_users (nemmeno le righe attive)'
 );
 select results_eq(
-  $$ select email, full_name from public.colleagues where email like 'rls-%' order by email $$,
+  $$ select email, full_name from public.list_colleagues() where email like 'rls-%' order by email $$,
   $$ values ('rls-a@example.com'::text, 'Anna Test'::text),
             ('rls-b@example.com', 'Bruno Test'),
             ('rls-capo@example.com', 'Capo Test'),
             ('rls-new@example.com', 'Nuovo Test') $$,
-  'A: la vista colleagues espone solo i colleghi attivi'
+  'A: list_colleagues() restituisce solo nome/email dei colleghi attivi'
 );
 select results_eq(
   $$ select id from public.profiles $$,
@@ -248,6 +248,26 @@ select throws_ok(
   $$ truncate public.audit_log $$,
   '42501', null, 'service_role: non svuota audit_log'
 );
+select lives_ok(
+  $$ insert into public.event_requests (user_id, title, start_at, end_at)
+     values ('00000000-0000-0000-0000-00000000000a', 'via server', now(), now() + interval '1 hour') $$,
+  'service_role: inserisce event_requests con user_id esplicito'
+);
+select results_eq(
+  $$ update public.event_requests set status = 'confirming'
+     where id = '20000000-0000-0000-0000-00000000000a'
+       and user_id = '00000000-0000-0000-0000-00000000000a' and status = 'pending'
+     returning status $$,
+  $$ values ('confirming'::text) $$,
+  'service_role: transizione condizionale riuscita'
+);
+select is_empty(
+  $$ update public.event_requests set status = 'confirming'
+     where id = '20000000-0000-0000-0000-00000000000a'
+       and user_id = '00000000-0000-0000-0000-00000000000a' and status = 'pending'
+     returning status $$,
+  'service_role: la stessa transizione ripetuta non tocca righe'
+);
 
 -- ---------------------------------------------------------------------------
 -- anon: nessun accesso
@@ -255,7 +275,7 @@ select throws_ok(
 set local role anon;
 select set_config('request.jwt.claims', '{"role":"anon"}', true);
 select throws_ok($$ select 1 from public.event_requests $$, '42501', null, 'anon: nessun accesso a event_requests');
-select throws_ok($$ select 1 from public.colleagues $$, '42501', null, 'anon: nessun accesso a colleagues');
+select throws_ok($$ select * from public.list_colleagues() $$, '42501', null, 'anon: non esegue list_colleagues()');
 select throws_ok($$ select 1 from public.allowed_users $$, '42501', null, 'anon: nessun accesso a allowed_users');
 
 -- ---------------------------------------------------------------------------

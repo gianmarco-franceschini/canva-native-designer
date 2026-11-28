@@ -243,25 +243,17 @@ export type Database = {
       };
     };
     Views: {
-      colleagues: {
-        Row: {
-          email: string;
-          full_name: string;
-        };
-        ComputedFields: never;
-        Insert: {
-          email?: string | null;
-          full_name?: string | null;
-        };
-        Update: {
-          email?: string | null;
-          full_name?: string | null;
-        };
-        Relationships: [];
-      };
+      [_ in never]: never;
     };
     Functions: {
       is_admin: { Args: Record<PropertyKey, never>; Returns: boolean };
+      list_colleagues: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          email: string;
+          full_name: string;
+        }[];
+      };
     };
     Enums: {
       [_ in never]: never;

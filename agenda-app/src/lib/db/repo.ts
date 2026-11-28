@@ -104,20 +104,15 @@ function fail(op: string, error: { message: string }): never {
 }
 
 /**
- * `userClient` (sessione dell'utente → RLS) per tutto; `serviceClient` solo per l'audit,
- * che è insert-only per service_role.
+ * `userClient` (sessione dell'utente → RLS) per le letture; `serviceClient` per le scritture
+ * su event_requests (sempre filtrate/inserite con lo `userId` dato) e per l'audit.
  */
 export function createSupabaseRepo(userClient: DbClient, serviceClient: DbClient): Repo {
   return {
     async listColleagues() {
-      const { data, error } = await userClient
-        .from("colleagues")
-        .select("email, full_name")
-        .order("full_name");
+      const { data, error } = await userClient.rpc("list_colleagues");
       if (error) fail("listColleagues", error);
-      return (data ?? []).flatMap((c) =>
-        c.email && c.full_name ? [{ email: c.email, fullName: c.full_name }] : [],
-      );
+      return (data ?? []).map((c) => ({ email: c.email, fullName: c.full_name }));
     },
 
     async getSettings() {
@@ -135,7 +130,8 @@ export function createSupabaseRepo(userClient: DbClient, serviceClient: DbClient
     },
 
     async insertRequest(r) {
-      const { data, error } = await userClient
+      // Scrittura via service_role (l'utente ha solo SELECT): user_id sempre esplicito.
+      const { data, error } = await serviceClient
         .from("event_requests")
         .insert({
           user_id: r.userId,
@@ -165,7 +161,8 @@ export function createSupabaseRepo(userClient: DbClient, serviceClient: DbClient
 
     async transitionRequest(id, userId, from, to, patch = {}) {
       // Un solo UPDATE condizionale: la transizione riesce solo se lo stato è ancora `from`.
-      const { data, error } = await userClient
+      // service_role scavalca la RLS, quindi il filtro su user_id è ciò che garantisce la proprietà.
+      const { data, error } = await serviceClient
         .from("event_requests")
         .update({ ...patchToRow(patch), status: to })
         .eq("id", id)

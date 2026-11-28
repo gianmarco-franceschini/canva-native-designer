@@ -228,13 +228,22 @@ create trigger audit_log_no_truncate
   for each statement execute function public.reject_audit_log_change();
 
 -- ---------------------------------------------------------------------------
--- Vista rubrica (solo nome/email dei colleghi attivi)
+-- Rubrica: solo nome/email dei colleghi attivi. SECURITY DEFINER così i non admin
+-- non hanno alcun accesso diretto ad allowed_users (ruoli, created_by, disattivati).
 -- ---------------------------------------------------------------------------
 
-create view public.colleagues
-with (security_invoker = true)
-as
-  select email, full_name from public.allowed_users where active;
+create function public.list_colleagues()
+returns table (email text, full_name text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select a.email, a.full_name
+  from public.allowed_users a
+  where a.active
+  order by a.full_name, a.email;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Privilegi
@@ -242,8 +251,7 @@ as
 
 revoke all on
   public.app_settings, public.closures, public.allowed_users, public.profiles,
-  public.conversations, public.messages, public.event_requests, public.audit_log,
-  public.colleagues
+  public.conversations, public.messages, public.event_requests, public.audit_log
 from public, anon, authenticated;
 revoke all on sequence public.audit_log_id_seq from public, anon, authenticated;
 
@@ -253,9 +261,10 @@ grant select, insert, update on public.allowed_users to authenticated;
 grant select on public.profiles to authenticated;
 grant select, insert, update, delete on public.conversations to authenticated;
 grant select, insert on public.messages to authenticated;
-grant select, insert, update on public.event_requests to authenticated;
+-- event_requests: l'utente legge le proprie; scritture solo lato server (service_role)
+-- dopo il controllo di proprietà, così lo stato non è manipolabile via PostgREST.
+grant select on public.event_requests to authenticated;
 grant select on public.audit_log to authenticated;
-grant select on public.colleagues to authenticated;
 
 -- service_role scavalca la RLS: per audit_log contano solo i privilegi.
 revoke all on public.audit_log from service_role;
@@ -273,9 +282,12 @@ revoke execute on function
   public.handle_new_auth_user(),
   public.handle_auth_user_email_change(),
   public.sync_profile_from_allowed_user(),
-  public.reject_audit_log_change()
+  public.reject_audit_log_change(),
+  public.list_colleagues()
 from public, anon, authenticated;
+revoke execute on function public.list_colleagues() from service_role;
 grant execute on function public.is_admin() to authenticated, service_role;
+grant execute on function public.list_colleagues() to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- RLS
@@ -307,10 +319,9 @@ create policy closures_update on public.closures
 create policy closures_delete on public.closures
   for delete to authenticated using ((select public.is_admin()));
 
--- allowed_users: righe attive leggibili (per la vista colleagues, security_invoker);
--- l'admin legge tutto e scrive.
+-- allowed_users: solo admin (i colleghi passano da list_colleagues()).
 create policy allowed_users_select on public.allowed_users
-  for select to authenticated using (active or (select public.is_admin()));
+  for select to authenticated using ((select public.is_admin()));
 create policy allowed_users_insert on public.allowed_users
   for insert to authenticated with check ((select public.is_admin()));
 create policy allowed_users_update on public.allowed_users
@@ -322,7 +333,7 @@ create policy profiles_select on public.profiles
   for select to authenticated
   using (id = (select auth.uid()) or (select public.is_admin()));
 
--- conversations / messages / event_requests: solo le proprie righe.
+-- conversations / messages: solo le proprie righe.
 create policy conversations_select on public.conversations
   for select to authenticated using (user_id = (select auth.uid()));
 create policy conversations_insert on public.conversations
@@ -346,14 +357,9 @@ create policy messages_insert on public.messages
     where c.id = conversation_id and c.user_id = (select auth.uid())
   ));
 
+-- event_requests: select delle proprie righe; nessuna policy di scrittura.
 create policy event_requests_select on public.event_requests
   for select to authenticated using (user_id = (select auth.uid()));
-create policy event_requests_insert on public.event_requests
-  for insert to authenticated
-  with check (user_id = (select auth.uid()) and status = 'pending');
-create policy event_requests_update on public.event_requests
-  for update to authenticated
-  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 -- audit_log: select solo admin; nessuna policy di scrittura (insert solo service_role).
 create policy audit_log_select on public.audit_log
