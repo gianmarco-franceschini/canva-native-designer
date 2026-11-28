@@ -172,8 +172,9 @@ export async function confirmRequest(
     return error("La richiesta non è più confermabile.");
   }
 
+  let res: Awaited<ReturnType<N8nClient["createEvent"]>>;
   try {
-    const res = await deps.n8n.createEvent({
+    res = await deps.n8n.createEvent({
       requestId: locked.id,
       title: locked.title,
       description: locked.description ?? "",
@@ -183,41 +184,70 @@ export async function confirmRequest(
       attendeeEmails: locked.attendeeEmails,
       allowConflict,
     });
+  } catch (err) {
+    const message = err instanceof N8nError && err.kind === "timeout" ? MSG_TIMEOUT : MSG_CALENDAR_ERROR;
+    await safely("transition failed", () =>
+      deps.repo.transitionRequest(id, user.id, "confirming", "failed", { error: message }),
+    );
+    await safely("audit event_failed", () =>
+      deps.repo.audit(
+        auditEntry(user, "event_failed", id, {
+          phase: "confirm",
+          kind: err instanceof N8nError ? err.kind : "unexpected",
+        }),
+      ),
+    );
+    return error(message);
+  }
 
-    if (res.status === "conflict") {
-      await deps.repo.transitionRequest(id, user.id, "confirming", "pending");
-      return {
-        status: "conflict",
-        conflicts: findConflicts(res.busy, { start: locked.startAt, end: locked.endAt }),
-      };
-    }
+  if (res.status === "conflict") {
+    const back = await safely("transition confirming->pending", () =>
+      deps.repo.transitionRequest(id, user.id, "confirming", "pending"),
+    );
+    if (!back) console.error(`[requests] ${id}: rientro a pending dopo conflitto non riuscito`);
+    await safely("audit event_conflict_on_confirm", () =>
+      deps.repo.audit(auditEntry(user, "event_conflict_on_confirm", id, {})),
+    );
+    return {
+      status: "conflict",
+      conflicts: findConflicts(res.busy, { start: locked.startAt, end: locked.endAt }),
+    };
+  }
 
-    await deps.repo.transitionRequest(id, user.id, "confirming", "confirmed", {
+  // L'evento Google esiste: da qui in poi nessun errore di persistenza deve diventare un errore per l'utente.
+  const saved = await safely("transition confirming->confirmed", () =>
+    deps.repo.transitionRequest(id, user.id, "confirming", "confirmed", {
       googleEventId: res.eventId,
       googleEventLink: res.htmlLink,
       confirmedAt: deps.now(),
       error: null,
-    });
-    const hadConflict = allowConflict && hasStoredConflicts(locked.conflictSnapshot);
-    await deps.repo.audit(
+    }),
+  );
+  if (!saved) {
+    console.error(
+      `[requests] ${id}: evento Google ${res.eventId} creato ma non salvato come confermato`,
+    );
+  }
+  await safely("audit confirm", () =>
+    deps.repo.audit(
       auditEntry(
         user,
         allowConflict ? "event_confirmed_with_conflict" : "event_confirmed",
         id,
-        { allowConflict, hadConflict },
+        { allowConflict, hadConflict: allowConflict && hasStoredConflicts(locked.conflictSnapshot) },
       ),
-    );
-    return { status: "confirmed", htmlLink: res.htmlLink };
+    ),
+  );
+  return { status: "confirmed", htmlLink: res.htmlLink };
+}
+
+/** Esegue un passo di persistenza accessorio: logga e inghiotte l'errore, restituisce null. */
+async function safely<T>(what: string, fn: () => Promise<T>): Promise<T | null> {
+  try {
+    return await fn();
   } catch (err) {
-    const message = err instanceof N8nError && err.kind === "timeout" ? MSG_TIMEOUT : MSG_CALENDAR_ERROR;
-    await deps.repo.transitionRequest(id, user.id, "confirming", "failed", { error: message });
-    await deps.repo.audit(
-      auditEntry(user, "event_failed", id, {
-        phase: "confirm",
-        kind: err instanceof N8nError ? err.kind : "unexpected",
-      }),
-    );
-    return error(message);
+    console.error(`[requests] ${what} non riuscito`, err);
+    return null;
   }
 }
 

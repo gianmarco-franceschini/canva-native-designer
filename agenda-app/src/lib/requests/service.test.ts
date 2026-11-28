@@ -315,6 +315,57 @@ describe("confirmRequest", () => {
   });
 });
 
+describe("confirmRequest persistenza e casi limite", () => {
+  it("persistenza che lancia dopo createEvent: resta confirmed, nessun event_failed", async () => {
+    const s = setup();
+    const req = await proposed(s);
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const orig = s.repo.transitionRequest.bind(s.repo);
+    s.repo.transitionRequest = (id, uid, from, to, patch) =>
+      to === "confirmed" ? Promise.reject(new Error("db down")) : orig(id, uid, from, to, patch);
+    s.repo.audit = async (e) => {
+      if (e.action.startsWith("event_confirmed")) throw new Error("audit down");
+      s.audits.push(e);
+    };
+    const r = await confirmRequest(s.deps, user, req.id, false);
+    expect(r).toEqual({ status: "confirmed", htmlLink: "https://cal/g1" });
+    expect(s.audits.some((a) => a.action === "event_failed")).toBe(false);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it("richiesta già confermata: errore 'già confermata'", async () => {
+    const s = setup();
+    const req = await proposed(s);
+    await confirmRequest(s.deps, user, req.id, false);
+    const r = await confirmRequest(s.deps, user, req.id, false);
+    expect(r).toMatchObject({ status: "error", message: expect.stringContaining("già confermata") });
+    expect(s.n8n.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("conflitto n8n: audit event_conflict_on_confirm", async () => {
+    const s = setup({
+      createEvent: vi.fn(async () => ({ status: "conflict" as const, busy: {} })),
+    });
+    const req = await proposed(s);
+    await confirmRequest(s.deps, user, req.id, false);
+    expect(s.audits.at(-1)?.action).toBe("event_conflict_on_confirm");
+  });
+
+  it("suggestSlots con ignoti: nessuna chiamata n8n", async () => {
+    const s = setup();
+    const r = await suggestSlots(s.deps, user, {
+      attendees: ["Pippo"],
+      durationMinutes: 30,
+      from: start,
+      to: end,
+    });
+    expect(r.unknown).toEqual(["Pippo"]);
+    expect(r.slots).toEqual([]);
+    expect(s.n8n.freeBusy).not.toHaveBeenCalled();
+  });
+});
+
 describe("cancelRequest", () => {
   it("pending: annulla senza n8n", async () => {
     const s = setup();
