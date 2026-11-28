@@ -22,4 +22,10 @@ describe("serverEnv", () => {
     vi.stubEnv("N8N_WEBHOOK_SECRET", "");
     expect(() => serverEnv()).toThrow(/N8N_WEBHOOK_SECRET/);
   });
+
+  it("lancia citando N8N_BASE_URL se non è un URL", () => {
+    for (const [k, v] of Object.entries(FULL)) vi.stubEnv(k, v);
+    vi.stubEnv("N8N_BASE_URL", "non-un-url");
+    expect(() => serverEnv()).toThrow(/N8N_BASE_URL/);
+  });
 });

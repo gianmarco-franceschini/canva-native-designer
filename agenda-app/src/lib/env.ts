@@ -3,7 +3,7 @@ import { z } from "zod";
 
 const serverSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(1),
-  N8N_BASE_URL: z.string().min(1),
+  N8N_BASE_URL: z.string().url(),
   N8N_WEBHOOK_SECRET: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   ALLOWED_DOMAIN: z.string().min(1),

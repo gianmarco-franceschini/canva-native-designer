@@ -9,13 +9,23 @@ function supabaseOrigin(): string | null {
   }
 }
 
-const connectSrc = ["'self'", supabaseOrigin()].filter(Boolean).join(" ");
+const origin = supabaseOrigin();
+const connectSrc = ["'self'", origin, origin && origin.replace(/^https:/, "wss:")]
+  .filter(Boolean)
+  .join(" ");
+
+// CSP provvisoria: sarà sostituita da una CSP con nonce (Task 6).
+const scriptSrc =
+  process.env.NODE_ENV === "development"
+    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+    : "script-src 'self' 'unsafe-inline'";
 
 const csp = [
   "default-src 'self'",
+  scriptSrc,
   "img-src 'self' data:",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'",
   `connect-src ${connectSrc}`,
   "frame-ancestors 'none'",
 ].join("; ");
